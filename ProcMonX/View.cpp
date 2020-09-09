@@ -15,6 +15,8 @@
 #include "FilterFactory.h"
 #include "ClipboardHelper.h"
 #include "SerializerFactory.h"
+#include "FormatHelper.h"
+#include <execution>
 
 CView::CView(IMainFrame* frame) : CViewBase(frame) {
 }
@@ -69,8 +71,7 @@ CString CView::GetColumnText(HWND, int row, int col) const {
 		case 1:
 		{
 			auto ts = item->GetTimeStamp();
-			text.Format(L".%06u", (ts / 10) % 1000000);
-			return CTime(*(FILETIME*)&ts).Format(L"%x %X") + text;
+			return FormatHelper::FormatTime(ts);
 		}
 		case 3:
 		{
@@ -155,7 +156,9 @@ std::wstring CView::GetEventDetails(EventData* data) const {
 	if (details.empty()) {
 		for (auto& prop : data->GetProperties()) {
 			if (prop.Name.substr(0, 8) != L"Reserved" && prop.Name.substr(0, 4) != L"TTID") {
-				auto value = data->FormatProperty(prop);
+				auto value = FormatHelper::FormatProperty(data, prop);
+				if(value.empty())
+					value = data->FormatProperty(prop);
 				if (!value.empty()) {
 					if (value.size() > 102)
 						value = value.substr(0, 100) + L"...";
@@ -178,7 +181,7 @@ bool CView::IsSortable(int col) const {
 }
 
 void CView::DoSort(const SortInfo* si) {
-	std::sort(m_Events.begin(), m_Events.end(), [&](auto& i1, auto& i2) {
+	auto compare = [&](auto& i1, auto& i2) {
 		switch (si->SortColumn) {
 			case 0: return SortHelper::SortNumbers(i1->GetIndex(), i2->GetIndex(), si->SortAscending);
 			case 1: return SortHelper::SortNumbers(i1->GetTimeStamp(), i2->GetTimeStamp(), si->SortAscending);
@@ -189,7 +192,12 @@ void CView::DoSort(const SortInfo* si) {
 			case 6: return SortHelper::SortNumbers(i1->GetEventDescriptor().Opcode, i2->GetEventDescriptor().Opcode, si->SortAscending);
 		}
 		return false;
-		});
+	};
+
+	if (m_Events.size() < 20000)
+		std::sort(m_Events.begin(), m_Events.end(), compare);
+	else
+		std::sort(std::execution::par, m_Events.begin(), m_Events.end(), compare);
 }
 
 BOOL CView::PreTranslateMessage(MSG* pMsg) {
@@ -220,7 +228,7 @@ DWORD CView::OnSubItemPrePaint(int, LPNMCUSTOMDRAW cd) {
 		bool bold = false;
 		CDCHandle dc(cd->hdc);
 		std::wstring str;
-		int x = cd->rc.left + 4, y = cd->rc.top;
+		int x = cd->rc.left + 6, y = cd->rc.top, right = cd->rc.right;
 		SIZE size;
 		for(;;) {
 			auto pos = details.find(L';', start);
@@ -231,7 +239,7 @@ DWORD CView::OnSubItemPrePaint(int, LPNMCUSTOMDRAW cd) {
 			auto colon = str.find(L':');
 			dc.SetTextColor(::GetSysColor(COLOR_WINDOWTEXT));
 			dc.GetTextExtent(str.c_str(), (int)colon + 1, &size);
-			if (x + size.cx > cd->rc.right)
+			if (x + size.cx > right)
 				break;
 
 			dc.TextOut(x, y, str.c_str(), (int)colon + 1);
@@ -239,7 +247,7 @@ DWORD CView::OnSubItemPrePaint(int, LPNMCUSTOMDRAW cd) {
 
 			dc.SetTextColor(RGB(0, 0, 255));
 			dc.GetTextExtent(str.data() + colon + 1, (int)str.size() - (int)colon - 1, &size);
-			if (x + size.cx > cd->rc.right)
+			if (x + size.cx > right)
 				break;
 			dc.TextOut(x, y, str.data() + colon + 1, (int)str.size() - (int)colon - 1);
 			x += size.cx + 4;
@@ -320,20 +328,24 @@ LRESULT CView::OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOO
 			{ IDI_DLL, L"Image" },
 			{ IDI_DLL_LOAD, L"Image/Load" },
 			{ IDI_DLL_UNLOAD, L"Image/UnLoad" },
-			{ IDI_NETWORK, L"Network" },
+			{ IDI_NETWORK, L"TCP" },
+			{ IDI_NETWORK, L"UDP" },
 			{ IDI_NETWORK, L"TcpIp" },
 			{ IDI_NETWORK, L"UdpIp" },
 			{ IDI_REGISTRY, L"Registry" },
 			{ IDI_FILE, L"FileIo" },
 			{ IDI_FILE, L"File" },
-			{ IDI_HANDLE, L"Object" },
 			{ IDI_HANDLE, L"Objects" },
+			{ IDI_HANDLE, L"Object" },
+			{ IDI_OBJECT, L"Object/CreateHandle" },
+			{ IDI_OBJECT, L"Object/CloseHandle" },
 			{ IDI_OBJECT, L"Handles" },
 			{ IDI_DISK, L"DiskIo" },
 			{ IDI_DISK, L"Disk I/O" },
 			{ IDI_MEMORY, L"PageFault" },
 			{ IDI_MEMORY, L"Page Fault" },
 			{ IDI_HEAP, L"Pool" },
+			{ IDI_HEAP, L"Kernel Pool" },
 		};
 		int index = 0;
 		for (auto entry : icons) {
